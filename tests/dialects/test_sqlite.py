@@ -1,6 +1,7 @@
 import sqlite3
+from contextlib import closing
 
-from sqlglot import ErrorLevel, UnsupportedError, exp, parse_one
+from sqlglot import ErrorLevel, UnsupportedError, exp, parse_one, transpile
 from sqlglot.generator import logger as generator_logger
 from sqlglot.helper import logger as helper_logger
 from sqlglot.optimizer.annotate_types import annotate_types
@@ -9,6 +10,43 @@ from tests.dialects.test_dialect import Validator
 
 class TestSQLite(Validator):
     dialect = "sqlite"
+
+    def test_date_arithmetic_preserves_subday_units(self):
+        self.validate_all(
+            "DATETIME('2024-01-01 10:00:00', '2 HOUR')",
+            read={"mysql": "DATE_ADD('2024-01-01 10:00:00', INTERVAL 2 HOUR)"},
+        )
+        with closing(sqlite3.connect(":memory:")) as connection:
+            for operation, amount, unit, expected in (
+                ("ADD", "2", "HOUR", "2024-01-01 12:00:00"),
+                ("ADD", "30", "MINUTE", "2024-01-01 10:30:00"),
+                ("ADD", "45", "SECOND", "2024-01-01 10:00:45"),
+                ("SUB", "2", "HOUR", "2024-01-01 08:00:00"),
+                ("SUB", "30", "MINUTE", "2024-01-01 09:30:00"),
+                ("SUB", "45", "SECOND", "2024-01-01 09:59:15"),
+                ("ADD", "-2", "HOUR", "2024-01-01 08:00:00"),
+                ("SUB", "-2", "HOUR", "2024-01-01 12:00:00"),
+                ("ADD", "1", "DAY", "2024-01-02"),
+            ):
+                with self.subTest(operation=operation, amount=amount, unit=unit):
+                    source = (
+                        f"SELECT DATE_{operation}('2024-01-01 10:00:00', INTERVAL {amount} {unit})"
+                    )
+                    sql = transpile(source, read="mysql", write="sqlite")[0]
+                    self.assertEqual(connection.execute(sql).fetchone()[0], expected)
+
+            for operation, expected in (
+                ("ADD", "2024-01-01 12:00:00"),
+                ("SUB", "2024-01-01 08:00:00"),
+            ):
+                source = f"SELECT DATE_{operation}(d, INTERVAL n HOUR) FROM (SELECT '2024-01-01 10:00:00' AS d, 2 AS n) AS t"
+                sql = transpile(source, read="mysql", write="sqlite")[0]
+                self.assertEqual(connection.execute(sql).fetchone()[0], expected)
+
+            sql = transpile("SELECT DATE_ADD(NULL, INTERVAL 2 HOUR)", read="mysql", write="sqlite")[
+                0
+            ]
+            self.assertIsNone(connection.execute(sql).fetchone()[0])
 
     def test_unary_plus(self):
         for sql in (

@@ -275,6 +275,9 @@ class SQLiteGenerator(generator.Generator):
             unit = unit or modifier.unit
             modifier = modifier.this
 
+        func_name = (
+            "DATETIME" if unit and unit.name.upper() in {"HOUR", "MINUTE", "SECOND"} else "DATE"
+        )
         modifier = modifier.unnest()
         if (
             unit
@@ -282,7 +285,7 @@ class SQLiteGenerator(generator.Generator):
             and not (isinstance(modifier, exp.Neg) and modifier.this.is_number)
         ):
             return self.func(
-                "DATE",
+                func_name,
                 expression.this,
                 exp.DPipe(
                     this=exp.paren(modifier),
@@ -291,7 +294,7 @@ class SQLiteGenerator(generator.Generator):
             )
         modifier = modifier.name if modifier.is_string else self.sql(modifier)
         modifier = f"{modifier} {unit.name}" if unit else modifier
-        return self.func("DATE", expression.this, exp.Literal.string(modifier))
+        return self.func(func_name, expression.this, exp.Literal.string(modifier))
 
     def datesub_sql(self, expression: exp.DateSub) -> str:
         # SQLite has no DATE_SUB, so add the negated amount instead
